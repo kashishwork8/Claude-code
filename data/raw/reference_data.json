@@ -1,0 +1,20 @@
+{
+  "CGNX": {"company_name": "COGNEX CORP", "sector": "Information Technology", "industry": "Electronic Equipment & Instruments (Machine Vision)", "country": "United States", "beta": null},
+  "COPX": {"company_name": "GLOBAL X COPPER MINERS ETF", "sector": "Materials (ETF)", "industry": "Copper Mining", "country": "United States", "beta": null},
+  "DRAM": {"company_name": "ROUNDHILL MEMORY ETF", "sector": "Information Technology (ETF)", "industry": "Semiconductor Memory", "country": "United States", "beta": null},
+  "DTC": {"company_name": "DUBAI TAXI CO PJSC", "sector": "Industrials", "industry": "Ground Transportation", "country": "United Arab Emirates", "beta": null},
+  "EMAAR": {"company_name": "EMAAR PROPERTIES PJSC", "sector": "Real Estate", "industry": "Real Estate Development", "country": "United Arab Emirates", "beta": null},
+  "EMIRATESN": {"company_name": "EMIRATES NBD PJSC", "sector": "Financials", "industry": "Banks", "country": "United Arab Emirates", "beta": null},
+  "FPS": {"company_name": "FORGENT POWER SOLUTIONS-CL A", "sector": "Industrials", "industry": "Electrical Equipment", "country": "United States", "beta": null},
+  "GDXJ": {"company_name": "VANECK JUNIOR GOLD MINERS", "sector": "Materials (ETF)", "industry": "Junior Gold Mining", "country": "United States", "beta": null},
+  "HOOD": {"company_name": "ROBINHOOD MARKETS INC - A", "sector": "Financials", "industry": "Capital Markets / Brokerage", "country": "United States", "beta": null},
+  "ONDS": {"company_name": "ONDAS INC", "sector": "Information Technology", "industry": "Wireless Networking / Drones", "country": "United States", "beta": null},
+  "RBRK": {"company_name": "RUBRIK INC-A", "sector": "Information Technology", "industry": "Software (Data Security)", "country": "United States", "beta": null},
+  "RDDT": {"company_name": "REDDIT INC-CL A", "sector": "Communication Services", "industry": "Internet Content & Social Media", "country": "United States", "beta": null},
+  "SALIK": {"company_name": "SALIK CO PJSC", "sector": "Industrials", "industry": "Toll Road Operator", "country": "United Arab Emirates", "beta": null},
+  "SILJ": {"company_name": "AMPLIFY JUNIOR SILVER MINERS", "sector": "Materials (ETF)", "industry": "Junior Silver Mining", "country": "United States", "beta": null},
+  "STM": {"company_name": "STMICROELECTRONICS NV-NY SHS", "sector": "Information Technology", "industry": "Semiconductors", "country": "Netherlands / Switzerland", "beta": null},
+  "URNM": {"company_name": "SPROTT URANIUM MINERS ETF", "sector": "Energy / Materials (ETF)", "industry": "Uranium Mining", "country": "Canada (ETF Domicile)", "beta": null},
+  "VSH": {"company_name": "VISHAY INTERTECHNOLOGY INC", "sector": "Information Technology", "industry": "Electronic Components", "country": "United States", "beta": null},
+  "WOLF": {"company_name": "WOLFSPEED INC", "sector": "Information Technology", "industry": "Semiconductors (SiC Power)", "country": "United States", "beta": null}
+}
