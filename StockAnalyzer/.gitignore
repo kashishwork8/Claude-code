@@ -1,0 +1,29 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Generated data & output (regenerated on every run)
+data/*.csv
+charts/*.png
+reports/*.xlsx
+
+# Keep the folders themselves under version control
+!data/.gitkeep
+!charts/.gitkeep
+!reports/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
