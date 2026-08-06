@@ -23,3 +23,17 @@ Note: `IB.reqExecutions()` returns fills TWS still holds in memory for the
 current session/day. For older history, use the TWS/IB Gateway "Flex Query"
 reports or the `reqExecutions` with an `ExecutionFilter` for historical dates
 supported by your account type.
+
+## Price Chart
+
+Plots the historical closing price for any Yahoo Finance ticker (stocks,
+ETFs, indices, forex, commodities, crypto, etc.) using `yfinance` and
+`matplotlib`. Close price only - no indicators, volume, or annotations.
+
+```bash
+pip install -r requirements.txt
+python price_chart.py
+```
+
+You'll be prompted for a ticker symbol and a timeframe (`1mo`, `3mo`, `6mo`,
+`1y`, `2y`, `5y`).
