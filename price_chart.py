@@ -6,6 +6,8 @@ using yfinance and matplotlib. Plots close price only - no indicators.
 
 import yfinance as yf
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import matplotlib.ticker as mticker
 
 # Timeframes supported by the tool, mapped to yfinance's `period` parameter.
 VALID_TIMEFRAMES = ["1mo", "3mo", "6mo", "1y", "2y", "5y"]
@@ -34,6 +36,13 @@ def fetch_price_data(ticker, timeframe):
     return data
 
 
+def _month_tick_label(x, _pos=None):
+    """Format an x-axis tick as the month abbreviation, or the year at
+    each January tick (mirrors TradingView-style date axes)."""
+    date = mdates.num2date(x)
+    return date.strftime("%Y") if date.month == 1 else date.strftime("%b")
+
+
 def plot_close_price(data, ticker, timeframe):
     """Plot the Close price series on a white background with a black line."""
     fig, ax = plt.subplots(facecolor="white")
@@ -42,8 +51,23 @@ def plot_close_price(data, ticker, timeframe):
     ax.plot(data.index, data["Close"], color="black", linewidth=2)
 
     ax.set_title(f"{ticker} Price Chart ({timeframe})")
-    ax.set_xlabel("Date")
+
+    # Price axis on the right, matching TradingView-style charts.
+    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right")
     ax.set_ylabel("Price")
+
+    # X-axis ticked by month, with the year shown at each January.
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=12))
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(_month_tick_label))
+    ax.set_xlabel("Date")
+
+    # Minimal border, similar to TradingView's chart frame.
+    ax.spines["top"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+
+    # Source attribution, bottom-left of the figure.
+    fig.text(0.01, 0.01, "Source: Yahoo Finance", fontsize=8, color="gray")
 
     plt.tight_layout()
     plt.show()
