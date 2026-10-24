@@ -20,10 +20,13 @@ useShorts = input.bool(true, "Enable shorts")
 ema = ta.ema(close, emaLen)
 rsi = ta.rsi(close, rsiLen)
 
-// Trend regime: confirmed after N consecutive closes above/below the EMA,
-// and it stays in force until N consecutive closes on the other side confirm a flip.
-aboveN = math.sum(close > ema ? 1 : 0, confBars) == confBars
-belowN = math.sum(close < ema ? 1 : 0, confBars) == confBars
+// Trend regime: confirmed after N consecutive closes that are on the right side of the EMA
+// AND break the previous bar's extreme (up: close > prior high, down: close < prior low).
+// It stays in force until N such closes in the other direction confirm a flip.
+upClose   = close > ema and close > high[1]
+downClose = close < ema and close < low[1]
+aboveN = math.sum(upClose ? 1 : 0, confBars) == confBars
+belowN = math.sum(downClose ? 1 : 0, confBars) == confBars
 var int trend = 0
 if aboveN
     trend := 1
@@ -33,6 +36,7 @@ else if belowN
 // ── Signals (evaluated on completed bar; fill at next bar's open) ──
 // Uptrend  -> longs only:  RSI(5) <= 30 during pullback, then crosses back above 30
 // Downtrend-> shorts only: RSI(5) >= 70 during rally,    then crosses back below 70
+// Longs only in an uptrend, shorts only in a downtrend (never against the trend).
 // Trend must hold on the extreme-RSI bar (previous bar) AND on the confirmation bar
 longSignal  = barstate.isconfirmed and trend == 1  and trend[1] == 1  and ta.crossover(rsi, rsiLow)
 shortSignal = barstate.isconfirmed and trend == -1 and trend[1] == -1 and ta.crossunder(rsi, rsiHigh)
