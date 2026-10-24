@@ -24,8 +24,12 @@ emaFalling = ema < ema[1]
 
 // ── Signals (evaluated on completed bar; fill at next bar's open) ──
 // crossover = rsi > 20 now AND rsi <= 20 on the previous bar ("reaches or falls below 20")
-longSignal  = barstate.isconfirmed and close > ema and emaRising  and ta.crossover(rsi, rsiLow)
-shortSignal = barstate.isconfirmed and close < ema and emaFalling and ta.crossunder(rsi, rsiHigh)
+// Trend filter must hold on the extreme-RSI bar (previous bar) AND on the confirmation bar
+longTrend  = close > ema and emaRising
+shortTrend = close < ema and emaFalling
+
+longSignal  = barstate.isconfirmed and longTrend  and longTrend[1]  and ta.crossover(rsi, rsiLow)
+shortSignal = barstate.isconfirmed and shortTrend and shortTrend[1] and ta.crossunder(rsi, rsiHigh)
 
 flat = strategy.position_size == 0
 
