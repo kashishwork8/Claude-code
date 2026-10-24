@@ -8,8 +8,9 @@ strategy("WTI RSI(5) Pullback + EMA50 Trend", overlay=true,
 // ── Inputs ──────────────────────────────────────────────
 emaLen   = input.int(50, "EMA length", minval=1)
 rsiLen   = input.int(5,  "RSI length", minval=1)
-rsiLow   = input.float(20, "RSI oversold level")
-rsiHigh  = input.float(80, "RSI overbought level")
+confBars = input.int(3, "Closes needed to confirm trend", minval=1)
+rsiLow   = input.float(30, "RSI oversold level")
+rsiHigh  = input.float(70, "RSI overbought level")
 tpUsd    = input.float(2.0, "Take profit ($ price move)", step=0.1)
 slUsd    = input.float(2.0, "Stop loss ($ price move)",   step=0.1)
 useLongs  = input.bool(true, "Enable longs")
@@ -19,17 +20,22 @@ useShorts = input.bool(true, "Enable shorts")
 ema = ta.ema(close, emaLen)
 rsi = ta.rsi(close, rsiLen)
 
-emaRising  = ema > ema[1]
-emaFalling = ema < ema[1]
+// Trend regime: confirmed after N consecutive closes above/below the EMA,
+// and it stays in force until N consecutive closes on the other side confirm a flip.
+aboveN = math.sum(close > ema ? 1 : 0, confBars) == confBars
+belowN = math.sum(close < ema ? 1 : 0, confBars) == confBars
+var int trend = 0
+if aboveN
+    trend := 1
+else if belowN
+    trend := -1
 
 // ── Signals (evaluated on completed bar; fill at next bar's open) ──
-// crossover = rsi > 20 now AND rsi <= 20 on the previous bar ("reaches or falls below 20")
-// Trend filter must hold on the extreme-RSI bar (previous bar) AND on the confirmation bar
-longTrend  = close > ema and emaRising
-shortTrend = close < ema and emaFalling
-
-longSignal  = barstate.isconfirmed and longTrend  and longTrend[1]  and ta.crossover(rsi, rsiLow)
-shortSignal = barstate.isconfirmed and shortTrend and shortTrend[1] and ta.crossunder(rsi, rsiHigh)
+// Uptrend  -> longs only:  RSI(5) <= 30 during pullback, then crosses back above 30
+// Downtrend-> shorts only: RSI(5) >= 70 during rally,    then crosses back below 70
+// Trend must hold on the extreme-RSI bar (previous bar) AND on the confirmation bar
+longSignal  = barstate.isconfirmed and trend == 1  and trend[1] == 1  and ta.crossover(rsi, rsiLow)
+shortSignal = barstate.isconfirmed and trend == -1 and trend[1] == -1 and ta.crossunder(rsi, rsiHigh)
 
 flat = strategy.position_size == 0
 
@@ -51,6 +57,6 @@ if strategy.position_size < 0
          stop  = strategy.position_avg_price + slUsd)
 
 // ── Plots ───────────────────────────────────────────────
-plot(ema, "EMA", color=emaRising ? color.green : color.red, linewidth=2)
+plot(ema, "EMA", color=trend == 1 ? color.green : trend == -1 ? color.red : color.gray, linewidth=2)
 plotshape(longSignal  and flat and useLongs,  "Long",  shape.triangleup,   location.belowbar, color.green, size=size.tiny)
 plotshape(shortSignal and flat and useShorts, "Short", shape.triangledown, location.abovebar, color.red,   size=size.tiny)
