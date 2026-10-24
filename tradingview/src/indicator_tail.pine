@@ -1,0 +1,9 @@
+
+// =====================================================================================
+// INDICATOR-ONLY: alert conditions (static messages; placeholders filled by TradingView)
+// alertcondition() messages must be constant, so the pattern name is NOT available here.
+// For messages that include the pattern name use the alert type "Any alert() function call".
+// =====================================================================================
+alertcondition(buySignal, title = "WTI RSI5 - BUY", message = 'BUY | {{exchange}}:{{ticker}} | TF {{interval}} | RSI {{plot("RSI value")}} | Close {{close}} | Bar open time (UTC) {{time}}')
+alertcondition(sellSignal, title = "WTI RSI5 - SELL", message = 'SELL | {{exchange}}:{{ticker}} | TF {{interval}} | RSI {{plot("RSI value")}} | Close {{close}} | Bar open time (UTC) {{time}}')
+alertcondition(buySignal or sellSignal, title = "WTI RSI5 - BUY or SELL", message = 'Signal (1 = BUY, -1 = SELL): {{plot("Signal direction")}} | {{exchange}}:{{ticker}} | TF {{interval}} | RSI {{plot("RSI value")}} | Close {{close}} | Bar open time (UTC) {{time}}')

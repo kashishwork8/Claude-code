@@ -1,0 +1,526 @@
+// =====================================================================================
+// SHARED SIGNAL ENGINE  —  this whole section is byte-for-byte identical in the
+// indicator and the strategy, so both produce the same BUY/SELL signals.
+// =====================================================================================
+
+// ---------- Option strings (used as dropdown values; do not edit casually) ----------
+string RSI_READING   = "Threshold reading (RSI <= OS / RSI >= OB)"
+string RSI_CROSS     = "Fresh cross into the zone"
+string TIMING_WINDOW = "RSI event within lookback window"
+string TIMING_SAME   = "RSI condition on pattern-completion candle only"
+string TOL_ATR       = "ATR multiple"
+string TOL_TICKS     = "Ticks (x syminfo.mintick)"
+string CONF_STRICT   = "Candle in signal colour closing beyond doji high/low"
+string CONF_ANY      = "Any candle closing beyond doji high/low"
+string CONF_MID      = "Candle in signal colour closing beyond doji midpoint"
+string CONFLICT_SKIP = "Skip both"
+string CONFLICT_BUY  = "Prefer BUY"
+string CONFLICT_SELL = "Prefer SELL"
+
+// ---------- 1. Chart, symbol & timeframe ----------
+string G_TF = "1. Chart, symbol & timeframe"
+bool   restrictTo1H   = input.bool(true, "Generate signals only on a 1-hour chart", group = G_TF, tooltip = "If ticked, no signals or alerts are produced on any other timeframe and a warning is shown.")
+string expectedPrefix = input.string("CFI", "Expected broker prefix (warning only)", group = G_TF, tooltip = "Compared with syminfo.prefix (the part before ':' in the symbol). Leave empty to disable the check. It never changes the signals.")
+bool   showInfoPanel  = input.bool(true, "Show info / warning panel", group = G_TF)
+
+// ---------- 2. RSI ----------
+string G_RSI = "2. RSI"
+float  rsiSrc        = input.source(close, "RSI source", group = G_RSI)
+int    rsiLen        = input.int(5, "RSI length", minval = 1, group = G_RSI)
+float  osLevel       = input.float(20.0, "Oversold threshold", minval = 0, maxval = 100, step = 1, group = G_RSI)
+float  obLevel       = input.float(80.0, "Overbought threshold", minval = 0, maxval = 100, step = 1, group = G_RSI)
+string rsiEventMode  = input.string(RSI_READING, "RSI event definition", options = [RSI_READING, RSI_CROSS], group = G_RSI, tooltip = "Reading: every completed bar with RSI <= OS (or >= OB) is an event. Cross: only the bar on which RSI enters the zone is an event.")
+string rsiTiming     = input.string(TIMING_WINDOW, "RSI timing vs. pattern", options = [TIMING_WINDOW, TIMING_SAME], group = G_RSI)
+int    rsiLookback   = input.int(3, "RSI lookback (bars before the pattern-completion candle)", minval = 0, maxval = 50, group = G_RSI, tooltip = "An RSI event stays eligible on its own bar and for this many further completed bars. 3 = the pattern-completion candle or any of the 3 candles before it.")
+bool   rsiExitFilter = input.bool(false, "Optional: RSI must be back inside the OS/OB band on the signal candle", group = G_RSI)
+bool   onePerEpisode = input.bool(true, "One signal per oversold / overbought episode", group = G_RSI, tooltip = "An episode starts when RSI enters the zone. After a BUY (SELL) fires, a new BUY (SELL) needs a new oversold (overbought) episode.")
+
+// ---------- 3. Trend context ----------
+string G_TR = "3. Trend context"
+int  trendLen          = input.int(3, "Price-action trend lookback (bars)", minval = 1, maxval = 50, group = G_TR, tooltip = "Downtrend: close < close N bars earlier AND the lowest low of the last N bars < the low N bars earlier. Uptrend is the mirror. Measured on the candle just before the pattern's first candle.")
+bool useEma            = input.bool(false, "Add EMA filter to the trend definition", group = G_TR, tooltip = "Downtrend additionally needs close < EMA, uptrend close > EMA. Fewer, more trend-aligned signals.")
+int  emaLen            = input.int(50, "EMA length", minval = 1, group = G_TR)
+bool trendForAll       = input.bool(true, "Require prior trend for every pattern", group = G_TR, tooltip = "Hammer, hanging man, shooting star, inverted hammer and dojis ALWAYS need the prior trend (it is part of their definition). This switch adds the same requirement to engulfing, harami, stars, piercing/dark cloud, tweezers, pin bars, soldiers/crows and three inside/outside.")
+bool showEma           = input.bool(true, "Plot the EMA when the EMA filter is on", group = G_TR)
+bool showTrendBg       = input.bool(false, "Shade background by trend state", group = G_TR)
+
+// ---------- 4. Candle geometry ----------
+string G_GEO = "4. Candle geometry"
+int   atrLen         = input.int(14, "ATR length", minval = 1, group = G_GEO)
+int   bodyAvgLen     = input.int(14, "Average-body length (for long/small bodies)", minval = 1, group = G_GEO)
+float longBodyMult   = input.float(1.0, "Long body >= x average body", minval = 0, step = 0.1, group = G_GEO)
+float smallBodyMult  = input.float(0.5, "Small body <= x average body", minval = 0, step = 0.1, group = G_GEO)
+float dojiBodyPct    = input.float(10.0, "Doji: body <= % of range", minval = 0, maxval = 100, step = 1, group = G_GEO)
+float djOppMaxPct    = input.float(10.0, "Dragonfly/gravestone: short wick <= % of range", minval = 0, maxval = 100, step = 1, group = G_GEO)
+float djLongMinPct   = input.float(60.0, "Dragonfly/gravestone: long wick >= % of range", minval = 0, maxval = 100, step = 1, group = G_GEO)
+float hamLongMult    = input.float(2.0, "Hammer family: long wick >= x body", minval = 0, step = 0.1, group = G_GEO)
+float hamShortMult   = input.float(0.5, "Hammer family: short wick <= x body", minval = 0, step = 0.1, group = G_GEO)
+float pinNosePct     = input.float(66.0, "Pin bar: nose wick >= % of range", minval = 0, maxval = 100, step = 1, group = G_GEO)
+float pinBodyPct     = input.float(33.0, "Pin bar: body <= % of range", minval = 0, maxval = 100, step = 1, group = G_GEO)
+bool  pinProtrude    = input.bool(true, "Pin bar: nose must exceed previous candle's low/high", group = G_GEO)
+float haramiMaxRatio = input.float(0.5, "Harami: inside body <= x mother body", minval = 0, maxval = 1, step = 0.05, group = G_GEO)
+float piercePct      = input.float(50.0, "Piercing / dark cloud: penetration >= % of prior body", minval = 0, maxval = 100, step = 5, group = G_GEO)
+float soldierBodyPct = input.float(50.0, "Soldiers / crows: body >= % of range", minval = 0, maxval = 100, step = 5, group = G_GEO)
+float soldierWickPct = input.float(30.0, "Soldiers / crows: closing-side wick <= % of range", minval = 0, maxval = 100, step = 5, group = G_GEO)
+string tolMethod     = input.string(TOL_ATR, "Tweezer tolerance method", options = [TOL_ATR, TOL_TICKS], group = G_GEO)
+float tweezerAtrMult = input.float(0.05, "Tweezer tolerance: x ATR", minval = 0, step = 0.01, group = G_GEO)
+int   tweezerTicks   = input.int(5, "Tweezer tolerance: ticks", minval = 0, group = G_GEO)
+float minRangeAtr    = input.float(0.0, "Min range of single-candle patterns (x ATR, 0 = off)", minval = 0, step = 0.05, group = G_GEO)
+
+// ---------- 5. Pattern switches (left = bullish, right = bearish) ----------
+string G_PAT = "5. Patterns (left = bullish | right = bearish)"
+bool enHammer      = input.bool(true, "Hammer", inline = "p01", group = G_PAT)
+bool enShooting    = input.bool(true, "Shooting star", inline = "p01", group = G_PAT)
+bool enDragonfly   = input.bool(true, "Dragonfly doji", inline = "p02", group = G_PAT)
+bool enGravestone  = input.bool(true, "Gravestone doji", inline = "p02", group = G_PAT)
+bool enDojiBull    = input.bool(true, "Standard doji (bull)", inline = "p03", group = G_PAT)
+bool enDojiBear    = input.bool(true, "Standard doji (bear)", inline = "p03", group = G_PAT)
+bool enBullEngulf  = input.bool(true, "Bullish engulfing", inline = "p04", group = G_PAT)
+bool enBearEngulf  = input.bool(true, "Bearish engulfing", inline = "p04", group = G_PAT)
+bool enTweezerBot  = input.bool(true, "Tweezer bottom", inline = "p05", group = G_PAT)
+bool enTweezerTop  = input.bool(true, "Tweezer top", inline = "p05", group = G_PAT)
+bool enMorningStar = input.bool(true, "Morning star", inline = "p06", group = G_PAT)
+bool enEveningStar = input.bool(true, "Evening star", inline = "p06", group = G_PAT)
+bool enPiercing    = input.bool(true, "Piercing line", inline = "p07", group = G_PAT)
+bool enDarkCloud   = input.bool(true, "Dark cloud cover", inline = "p07", group = G_PAT)
+bool enBullHarami  = input.bool(true, "Bullish harami", inline = "p08", group = G_PAT)
+bool enBearHarami  = input.bool(true, "Bearish harami", inline = "p08", group = G_PAT)
+bool enInvHammer   = input.bool(true, "Inverted hammer", inline = "p09", group = G_PAT)
+bool enHangingMan  = input.bool(true, "Hanging man", inline = "p09", group = G_PAT)
+bool enSoldiers    = input.bool(true, "Three white soldiers", inline = "p10", group = G_PAT)
+bool enCrows       = input.bool(true, "Three black crows", inline = "p10", group = G_PAT)
+bool enBullPin     = input.bool(true, "Bullish pin bar", inline = "p11", group = G_PAT)
+bool enBearPin     = input.bool(true, "Bearish pin bar", inline = "p11", group = G_PAT)
+bool enThreeInUp   = input.bool(true, "Three inside up", inline = "p12", group = G_PAT)
+bool enThreeInDn   = input.bool(true, "Three inside down", inline = "p12", group = G_PAT)
+bool enThreeOutUp  = input.bool(true, "Three outside up", inline = "p13", group = G_PAT)
+bool enThreeOutDn  = input.bool(true, "Three outside down", inline = "p13", group = G_PAT)
+
+// ---------- 6. Doji confirmation ----------
+string G_DJ = "6. Doji confirmation"
+string dojiConfRule   = input.string(CONF_STRICT, "Confirmation rule", options = [CONF_STRICT, CONF_ANY, CONF_MID], group = G_DJ, tooltip = "Default BUY: a bullish candle (close > open) that closes above the doji high. SELL is the mirror (bearish candle closing below the doji low).")
+int    dojiExpiry     = input.int(1, "Bars allowed for confirmation", minval = 1, maxval = 10, group = G_DJ, tooltip = "1 = only the very next completed candle may confirm; otherwise the setup is cancelled.")
+bool   dojiCancelBrk  = input.bool(true, "Cancel if a candle closes beyond the opposite doji extreme", group = G_DJ)
+
+// ---------- 7. Signal rules ----------
+string G_SIG = "7. Signal rules"
+string conflictRule = input.string(CONFLICT_SKIP, "If BUY and SELL qualify on the same candle", options = [CONFLICT_SKIP, CONFLICT_BUY, CONFLICT_SELL], group = G_SIG)
+int    cooldownBars = input.int(0, "Min bars between signals in the same direction (0 = off)", minval = 0, group = G_SIG)
+
+// ---------- 8. Display ----------
+string G_DSP = "8. Display"
+bool showMarkers   = input.bool(true, "Triangle markers", group = G_DSP)
+bool showLabels    = input.bool(true, "BUY / SELL labels", group = G_DSP)
+bool showPatName   = input.bool(true, "Pattern name in label", group = G_DSP)
+bool showRsiVal    = input.bool(true, "RSI value in label", group = G_DSP)
+bool showPatBox    = input.bool(true, "Highlight the pattern candles with a box", group = G_DSP)
+bool colorSigBar   = input.bool(false, "Colour the signal candle", group = G_DSP)
+bool showDojiSetup = input.bool(true, "Mark pending doji setups (not signals)", group = G_DSP)
+
+// ---------- 9. alert() messages ----------
+string G_AL = "9. Dynamic alerts (alert() function)"
+bool alertBuyOn  = input.bool(true, "Send BUY via alert()", group = G_AL)
+bool alertSellOn = input.bool(true, "Send SELL via alert()", group = G_AL)
+
+// =====================================================================================
+// Base series (all computed on every bar, outside conditional blocks)
+// =====================================================================================
+float atr      = ta.atr(atrLen)
+float rsi      = ta.rsi(rsiSrc, rsiLen)
+float emaVal   = ta.ema(close, emaLen)
+float rng      = high - low
+float body     = math.abs(close - open)
+float bodyTop  = math.max(open, close)
+float bodyBot  = math.min(open, close)
+float bodyMid  = (open + close) / 2.0
+float upWick   = high - bodyTop
+float loWick   = bodyBot - low
+bool  isBull   = close > open
+bool  isBear   = close < open
+float bodyAvg  = ta.sma(body, bodyAvgLen)
+float lowestN  = ta.lowest(low, trendLen)
+float highestN = ta.highest(high, trendLen)
+
+int  warmup     = math.max(rsiLen, emaLen, atrLen, bodyAvgLen) + trendLen + 5
+bool enoughBars = bar_index >= warmup
+bool is1H       = timeframe.isminutes and timeframe.multiplier == 60
+bool tfOk       = not restrictTo1H or is1H
+bool prefixOk   = expectedPrefix == "" or syminfo.prefix == expectedPrefix
+
+// =====================================================================================
+// Trend context (price action, optional EMA)
+// =====================================================================================
+bool paDown    = close < close[trendLen] and lowestN < low[trendLen]
+bool paUp      = close > close[trendLen] and highestN > high[trendLen]
+bool downtrend = paDown and (not useEma or close < emaVal)
+bool uptrend   = paUp and (not useEma or close > emaVal)
+// Trend ending on the candle immediately BEFORE the pattern's first candle.
+// Suffix = number of candles in the pattern.
+bool dnBefore1 = downtrend[1]
+bool dnBefore2 = downtrend[2]
+bool dnBefore3 = downtrend[3]
+bool upBefore1 = uptrend[1]
+bool upBefore2 = uptrend[2]
+bool upBefore3 = uptrend[3]
+// Optional trend requirement for patterns that do not define it themselves
+bool dnOpt1 = not trendForAll or dnBefore1
+bool dnOpt2 = not trendForAll or dnBefore2
+bool dnOpt3 = not trendForAll or dnBefore3
+bool upOpt1 = not trendForAll or upBefore1
+bool upOpt2 = not trendForAll or upBefore2
+bool upOpt3 = not trendForAll or upBefore3
+
+// =====================================================================================
+// RSI events, lookback window and episodes
+// =====================================================================================
+bool osReading = rsi <= osLevel
+bool obReading = rsi >= obLevel
+bool osCross   = osReading and rsi[1] > osLevel
+bool obCross   = obReading and rsi[1] < obLevel
+bool osEvent   = rsiEventMode == RSI_READING ? osReading : osCross
+bool obEvent   = rsiEventMode == RSI_READING ? obReading : obCross
+int  bsOs      = ta.barssince(osEvent)
+int  bsOb      = ta.barssince(obEvent)
+int  rsiWindow = rsiTiming == TIMING_SAME ? 0 : rsiLookback
+bool rsiBullOk = not na(bsOs) and bsOs <= rsiWindow
+bool rsiBearOk = not na(bsOb) and bsOb <= rsiWindow
+
+var int osEpisode   = 0
+var int obEpisode   = 0
+var int usedOsEp    = -1
+var int usedObEp    = -1
+if osReading and not osReading[1]
+    osEpisode += 1
+if obReading and not obReading[1]
+    obEpisode += 1
+
+// =====================================================================================
+// Single-candle geometry (zero-range and zero-body safe: no divisions anywhere)
+// =====================================================================================
+bool hasRange     = rng > 0
+bool rangeOk      = hasRange and (minRangeAtr <= 0 or rng >= minRangeAtr * atr)
+bool isDoji       = hasRange and body <= dojiBodyPct / 100.0 * rng
+bool isDragonfly  = isDoji and upWick <= djOppMaxPct / 100.0 * rng and loWick >= djLongMinPct / 100.0 * rng
+bool isGravestone = isDoji and loWick <= djOppMaxPct / 100.0 * rng and upWick >= djLongMinPct / 100.0 * rng
+bool isStdDoji    = isDoji and not isDragonfly and not isGravestone
+bool isLongBody   = bodyAvg > 0 and body >= longBodyMult * bodyAvg
+bool isSmallBody  = bodyAvg > 0 and body <= smallBodyMult * bodyAvg
+// Hammer-family shapes exclude dojis, so body > 0 is guaranteed here
+bool hammerShape  = hasRange and not isDoji and loWick >= hamLongMult * body and upWick <= hamShortMult * body
+bool invHamShape  = hasRange and not isDoji and upWick >= hamLongMult * body and loWick <= hamShortMult * body
+bool bullPinShape = hasRange and not isDoji and loWick >= pinNosePct / 100.0 * rng and body <= pinBodyPct / 100.0 * rng and (not pinProtrude or low < low[1])
+bool bearPinShape = hasRange and not isDoji and upWick >= pinNosePct / 100.0 * rng and body <= pinBodyPct / 100.0 * rng and (not pinProtrude or high > high[1])
+bool soldierBar   = isBull and body >= soldierBodyPct / 100.0 * rng and upWick <= soldierWickPct / 100.0 * rng
+bool crowBar      = isBear and body >= soldierBodyPct / 100.0 * rng and loWick <= soldierWickPct / 100.0 * rng
+float tweezerTol  = tolMethod == TOL_ATR ? tweezerAtrMult * atr : tweezerTicks * syminfo.mintick
+
+// =====================================================================================
+// Multi-candle shapes ([1] = previous completed candle, [2] = two candles back)
+// =====================================================================================
+bool bullEngulfShape = isBear[1] and isBull and open <= close[1] and close >= open[1] and body > body[1]
+bool bearEngulfShape = isBull[1] and isBear and open >= close[1] and close <= open[1] and body > body[1]
+bool tweezerBotShape = isBear[1] and isBull and math.abs(low - low[1]) <= tweezerTol
+bool tweezerTopShape = isBull[1] and isBear and math.abs(high - high[1]) <= tweezerTol
+bool piercingShape   = isBear[1] and isLongBody[1] and isBull and open <= close[1] and close >= close[1] + piercePct / 100.0 * body[1] and close < open[1]
+bool darkCloudShape  = isBull[1] and isLongBody[1] and isBear and open >= close[1] and close <= close[1] - piercePct / 100.0 * body[1] and close > open[1]
+bool bullHaramiShape = isBear[1] and isLongBody[1] and isBull and bodyTop <= open[1] and bodyBot >= close[1] and body <= haramiMaxRatio * body[1]
+bool bearHaramiShape = isBull[1] and isLongBody[1] and isBear and bodyTop <= close[1] and bodyBot >= open[1] and body <= haramiMaxRatio * body[1]
+bool morningShape    = isBear[2] and isLongBody[2] and isSmallBody[1] and bodyTop[1] <= bodyMid[2] and isBull and body > body[1] and close >= bodyMid[2]
+bool eveningShape    = isBull[2] and isLongBody[2] and isSmallBody[1] and bodyBot[1] >= bodyMid[2] and isBear and body > body[1] and close <= bodyMid[2]
+bool soldiersShape   = soldierBar[2] and soldierBar[1] and soldierBar and close[1] > close[2] and close > close[1] and open[1] >= open[2] and open[1] <= close[2] and open >= open[1] and open <= close[1]
+bool crowsShape      = crowBar[2] and crowBar[1] and crowBar and close[1] < close[2] and close < close[1] and open[1] <= open[2] and open[1] >= close[2] and open <= open[1] and open >= close[1]
+bool threeInUpShape  = bullHaramiShape[1] and isBull and close > open[2]
+bool threeInDnShape  = bearHaramiShape[1] and isBear and close < open[2]
+bool threeOutUpShape = bullEngulfShape[1] and isBull and close > close[1]
+bool threeOutDnShape = bearEngulfShape[1] and isBear and close < close[1]
+
+// =====================================================================================
+// Non-doji patterns with their trend context (evaluated on the completion candle)
+// =====================================================================================
+bool pHammer     = enHammer and rangeOk and hammerShape and dnBefore1
+bool pInvHammer  = enInvHammer and rangeOk and invHamShape and dnBefore1
+bool pBullPin    = enBullPin and rangeOk and bullPinShape and dnOpt1
+bool pBullEngulf = enBullEngulf and bullEngulfShape and dnOpt2
+bool pTweezerBot = enTweezerBot and tweezerBotShape and dnOpt2
+bool pPiercing   = enPiercing and piercingShape and dnOpt2
+bool pBullHarami = enBullHarami and bullHaramiShape and dnOpt2
+bool pMorning    = enMorningStar and morningShape and dnOpt3
+bool pSoldiers   = enSoldiers and soldiersShape and dnOpt3
+bool pThreeInUp  = enThreeInUp and threeInUpShape and dnOpt3
+bool pThreeOutUp = enThreeOutUp and threeOutUpShape and dnOpt3
+
+bool pShooting   = enShooting and rangeOk and invHamShape and upBefore1
+bool pHangingMan = enHangingMan and rangeOk and hammerShape and upBefore1
+bool pBearPin    = enBearPin and rangeOk and bearPinShape and upOpt1
+bool pBearEngulf = enBearEngulf and bearEngulfShape and upOpt2
+bool pTweezerTop = enTweezerTop and tweezerTopShape and upOpt2
+bool pDarkCloud  = enDarkCloud and darkCloudShape and upOpt2
+bool pBearHarami = enBearHarami and bearHaramiShape and upOpt2
+bool pEvening    = enEveningStar and eveningShape and upOpt3
+bool pCrows      = enCrows and crowsShape and upOpt3
+bool pThreeInDn  = enThreeInDn and threeInDnShape and upOpt3
+bool pThreeOutDn = enThreeOutDn and threeOutDnShape and upOpt3
+
+// Deterministic priority: 3-candle > 2-candle > 1-candle patterns, then list order.
+string bullName = ""
+int    bullLen  = 0
+if pThreeOutUp
+    bullName := "Three Outside Up"
+    bullLen  := 3
+else if pThreeInUp
+    bullName := "Three Inside Up"
+    bullLen  := 3
+else if pMorning
+    bullName := "Morning Star"
+    bullLen  := 3
+else if pSoldiers
+    bullName := "Three White Soldiers"
+    bullLen  := 3
+else if pBullEngulf
+    bullName := "Bullish Engulfing"
+    bullLen  := 2
+else if pPiercing
+    bullName := "Piercing Line"
+    bullLen  := 2
+else if pTweezerBot
+    bullName := "Tweezer Bottom"
+    bullLen  := 2
+else if pBullHarami
+    bullName := "Bullish Harami"
+    bullLen  := 2
+else if pHammer
+    bullName := "Hammer"
+    bullLen  := 1
+else if pBullPin
+    bullName := "Bullish Pin Bar"
+    bullLen  := 1
+else if pInvHammer
+    bullName := "Inverted Hammer"
+    bullLen  := 1
+
+string bearName = ""
+int    bearLen  = 0
+if pThreeOutDn
+    bearName := "Three Outside Down"
+    bearLen  := 3
+else if pThreeInDn
+    bearName := "Three Inside Down"
+    bearLen  := 3
+else if pEvening
+    bearName := "Evening Star"
+    bearLen  := 3
+else if pCrows
+    bearName := "Three Black Crows"
+    bearLen  := 3
+else if pBearEngulf
+    bearName := "Bearish Engulfing"
+    bearLen  := 2
+else if pDarkCloud
+    bearName := "Dark Cloud Cover"
+    bearLen  := 2
+else if pTweezerTop
+    bearName := "Tweezer Top"
+    bearLen  := 2
+else if pBearHarami
+    bearName := "Bearish Harami"
+    bearLen  := 2
+else if pShooting
+    bearName := "Shooting Star"
+    bearLen  := 1
+else if pBearPin
+    bearName := "Bearish Pin Bar"
+    bearLen  := 1
+else if pHangingMan
+    bearName := "Hanging Man"
+    bearLen  := 1
+
+// =====================================================================================
+// Doji setups: created on the doji candle, signalled only on a LATER confirming candle
+// =====================================================================================
+bool gateOk = enoughBars and tfOk
+
+bool bullDojiNow = gateOk and rangeOk and dnBefore1 and rsiBullOk and ((enDragonfly and isDragonfly) or (enDojiBull and isStdDoji))
+bool bearDojiNow = gateOk and rangeOk and upBefore1 and rsiBearOk and ((enGravestone and isGravestone) or (enDojiBear and isStdDoji))
+
+var int    bullDjBar  = na
+var float  bullDjHigh = na
+var float  bullDjLow  = na
+var float  bullDjMid  = na
+var string bullDjName = ""
+var int    bullDjEp   = 0
+var int    bearDjBar  = na
+var float  bearDjHigh = na
+var float  bearDjLow  = na
+var float  bearDjMid  = na
+var string bearDjName = ""
+var int    bearDjEp   = 0
+
+bool   bullDjConfirmed = false
+string bullDjConfName  = ""
+int    bullDjConfLen   = 0
+int    bullDjConfEp    = 0
+bool   bearDjConfirmed = false
+string bearDjConfName  = ""
+int    bearDjConfLen   = 0
+int    bearDjConfEp    = 0
+
+// Step 1: try to confirm / expire an existing setup (only on candles AFTER the doji)
+if not na(bullDjBar) and bar_index > bullDjBar
+    int   age    = bar_index - bullDjBar
+    float level  = dojiConfRule == CONF_MID ? bullDjMid : bullDjHigh
+    bool  colOk  = dojiConfRule == CONF_ANY or isBull
+    if colOk and close > level
+        bullDjConfirmed := true
+        bullDjConfName  := bullDjName
+        bullDjConfLen   := age + 1
+        bullDjConfEp    := bullDjEp
+        bullDjBar       := na
+    else if (dojiCancelBrk and close < bullDjLow) or age >= dojiExpiry
+        bullDjBar := na
+
+if not na(bearDjBar) and bar_index > bearDjBar
+    int   age    = bar_index - bearDjBar
+    float level  = dojiConfRule == CONF_MID ? bearDjMid : bearDjLow
+    bool  colOk  = dojiConfRule == CONF_ANY or isBear
+    if colOk and close < level
+        bearDjConfirmed := true
+        bearDjConfName  := bearDjName
+        bearDjConfLen   := age + 1
+        bearDjConfEp    := bearDjEp
+        bearDjBar       := na
+    else if (dojiCancelBrk and close > bearDjHigh) or age >= dojiExpiry
+        bearDjBar := na
+
+// Step 2: register a new setup (a newer doji replaces an older pending one)
+if bullDojiNow
+    bullDjBar  := bar_index
+    bullDjHigh := high
+    bullDjLow  := low
+    bullDjMid  := (high + low) / 2.0
+    bullDjName := isDragonfly ? "Dragonfly Doji" : "Doji (bull)"
+    bullDjEp   := osEpisode
+if bearDojiNow
+    bearDjBar  := bar_index
+    bearDjHigh := high
+    bearDjLow  := low
+    bearDjMid  := (high + low) / 2.0
+    bearDjName := isGravestone ? "Gravestone Doji" : "Doji (bear)"
+    bearDjEp   := obEpisode
+
+// =====================================================================================
+// Final signals (only on CLOSED candles: barstate.isconfirmed)
+// =====================================================================================
+var int lastBuyBar  = na
+var int lastSellBar = na
+
+bool confirmedBar = barstate.isconfirmed
+// A doji candle never triggers an immediate signal; it can only create a doji setup.
+bool bullPatOk = bullName != "" and not isDoji and rsiBullOk and (not onePerEpisode or osEpisode != usedOsEp)
+bool bearPatOk = bearName != "" and not isDoji and rsiBearOk and (not onePerEpisode or obEpisode != usedObEp)
+bool bullDjOk  = bullDjConfirmed and (not onePerEpisode or bullDjConfEp != usedOsEp)
+bool bearDjOk  = bearDjConfirmed and (not onePerEpisode or bearDjConfEp != usedObEp)
+bool buyCool   = na(lastBuyBar) or bar_index - lastBuyBar > cooldownBars
+bool sellCool  = na(lastSellBar) or bar_index - lastSellBar > cooldownBars
+bool buyRaw    = confirmedBar and gateOk and buyCool and (bullPatOk or bullDjOk) and (not rsiExitFilter or rsi > osLevel)
+bool sellRaw   = confirmedBar and gateOk and sellCool and (bearPatOk or bearDjOk) and (not rsiExitFilter or rsi < obLevel)
+bool conflict   = buyRaw and sellRaw
+bool buySignal  = buyRaw and (not conflict or conflictRule == CONFLICT_BUY)
+bool sellSignal = sellRaw and (not conflict or conflictRule == CONFLICT_SELL)
+
+string djBullTxt = bullDjConfName + " (confirmed)"
+string djBearTxt = bearDjConfName + " (confirmed)"
+string buyName  = bullPatOk and bullDjOk ? bullName + " + " + djBullTxt : bullPatOk ? bullName : bullDjOk ? djBullTxt : ""
+string sellName = bearPatOk and bearDjOk ? bearName + " + " + djBearTxt : bearPatOk ? bearName : bearDjOk ? djBearTxt : ""
+int    buyLen   = math.max(bullPatOk ? bullLen : 0, bullDjOk ? bullDjConfLen : 0)
+int    sellLen  = math.max(bearPatOk ? bearLen : 0, bearDjOk ? bearDjConfLen : 0)
+
+var string lastSignalTxt = "none yet"
+if buySignal
+    lastBuyBar := bar_index
+    usedOsEp   := osEpisode
+    lastSignalTxt := "BUY  " + buyName + "  @ " + str.tostring(close, format.mintick)
+if sellSignal
+    lastSellBar := bar_index
+    usedObEp    := obEpisode
+    lastSignalTxt := "SELL " + sellName + "  @ " + str.tostring(close, format.mintick)
+
+// Low / high of all candles that belong to the signalling pattern (used for boxes and stops)
+f_extremes(int n) =>
+    float lo = low
+    float hi = high
+    if n > 1
+        for i = 1 to n - 1
+            lo := math.min(lo, low[i])
+            hi := math.max(hi, high[i])
+    [lo, hi]
+
+[buyLo, buyHi]   = f_extremes(math.max(buyLen, 1))
+[sellLo, sellHi] = f_extremes(math.max(sellLen, 1))
+
+// =====================================================================================
+// Chart display
+// =====================================================================================
+plotshape(showMarkers and buySignal, title = "BUY marker", style = shape.triangleup, location = location.belowbar, color = color.new(color.green, 0), size = size.small)
+plotshape(showMarkers and sellSignal, title = "SELL marker", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
+plotshape(showDojiSetup and bullDojiNow and confirmedBar, title = "Bullish doji setup (pending)", style = shape.diamond, location = location.belowbar, color = color.new(color.teal, 40), size = size.tiny)
+plotshape(showDojiSetup and bearDojiNow and confirmedBar, title = "Bearish doji setup (pending)", style = shape.diamond, location = location.abovebar, color = color.new(color.maroon, 40), size = size.tiny)
+plot(useEma and showEma ? emaVal : na, title = "Trend EMA", color = color.orange, linewidth = 1)
+bgcolor(showTrendBg and downtrend ? color.new(color.red, 92) : showTrendBg and uptrend ? color.new(color.green, 92) : na, title = "Trend background")
+barcolor(colorSigBar and buySignal ? color.lime : colorSigBar and sellSignal ? color.fuchsia : na, title = "Signal candle colour")
+plot(rsi, title = "RSI value", display = display.data_window)
+plot(buySignal ? 1 : sellSignal ? -1 : 0, title = "Signal direction", display = display.data_window)
+
+f_labelText(string dir, string patName) =>
+    string t = dir
+    if showPatName
+        t += "\n" + patName
+    if showRsiVal
+        t += "\nRSI " + str.tostring(rsi, "#.0")
+    t
+
+if buySignal and showLabels
+    label.new(x = bar_index, y = buyLo - 0.5 * atr, text = f_labelText("BUY", buyName), xloc = xloc.bar_index, yloc = yloc.price, color = color.new(color.green, 0), style = label.style_label_up, textcolor = color.white, size = size.small)
+if sellSignal and showLabels
+    label.new(x = bar_index, y = sellHi + 0.5 * atr, text = f_labelText("SELL", sellName), xloc = xloc.bar_index, yloc = yloc.price, color = color.new(color.red, 0), style = label.style_label_down, textcolor = color.white, size = size.small)
+if buySignal and showPatBox
+    box.new(left = bar_index - math.max(buyLen, 1) + 1, top = buyHi, right = bar_index, bottom = buyLo, border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 85))
+if sellSignal and showPatBox
+    box.new(left = bar_index - math.max(sellLen, 1) + 1, top = sellHi, right = bar_index, bottom = sellLo, border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 85))
+
+// Info / warning panel
+var table infoT = table.new(position.top_right, 2, 9, bgcolor = color.new(color.black, 15), border_color = color.gray, border_width = 1)
+if showInfoPanel and barstate.islast
+    string trendTxt = "Price action " + str.tostring(trendLen) + " bars" + (useEma ? " + EMA " + str.tostring(emaLen) : "")
+    string stateTxt = downtrend ? "Downtrend" : uptrend ? "Uptrend" : "No trend"
+    string pendTxt  = (na(bullDjBar) ? "" : "bull doji ") + (na(bearDjBar) ? "" : "bear doji")
+    string tfWarn   = is1H ? "OK (1H)" : restrictTo1H ? "NOT 1H - signals OFF" : "NOT 1H - unvalidated"
+    string pfWarn   = prefixOk ? syminfo.prefix : syminfo.prefix + " (expected " + expectedPrefix + ")"
+    table.cell(infoT, 0, 0, "Symbol", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 0, syminfo.tickerid, text_color = color.white, text_size = size.small)
+    table.cell(infoT, 0, 1, "Broker prefix", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 1, pfWarn, text_color = prefixOk ? color.white : color.orange, text_size = size.small)
+    table.cell(infoT, 0, 2, "Timeframe", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 2, timeframe.period + "  " + tfWarn, text_color = is1H ? color.white : color.orange, text_size = size.small)
+    table.cell(infoT, 0, 3, "RSI(" + str.tostring(rsiLen) + ")", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 3, str.tostring(rsi, "#.0"), text_color = osReading ? color.lime : obReading ? color.red : color.white, text_size = size.small)
+    table.cell(infoT, 0, 4, "Trend filter", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 4, trendTxt, text_color = color.white, text_size = size.small)
+    table.cell(infoT, 0, 5, "Trend now", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 5, stateTxt, text_color = color.white, text_size = size.small)
+    table.cell(infoT, 0, 6, "Pending setups", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 6, pendTxt == "" ? "none" : pendTxt, text_color = color.white, text_size = size.small)
+    table.cell(infoT, 0, 7, "Last signal", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 7, lastSignalTxt, text_color = color.white, text_size = size.small)
+    table.cell(infoT, 0, 8, "History", text_color = color.white, text_size = size.small)
+    table.cell(infoT, 1, 8, enoughBars ? str.tostring(bar_index + 1) + " bars" : "warming up", text_color = enoughBars ? color.white : color.orange, text_size = size.small)
+
+// Dynamic alert() messages (fire once, after the candle has closed)
+f_alertMsg(string dir, string patName) =>
+    int closeT = na(time_close) ? time : time_close
+    dir + " | " + syminfo.tickerid + " | TF " + timeframe.period + " | RSI(" + str.tostring(rsiLen) + ") " + str.tostring(rsi, "#.##") + " | Pattern: " + patName + " | Close " + str.tostring(close, format.mintick) + " | Candle close " + str.format_time(closeT, "yyyy-MM-dd HH:mm", syminfo.timezone) + " " + syminfo.timezone
+
+if buySignal and alertBuyOn
+    alert(f_alertMsg("BUY", buyName), alert.freq_once_per_bar_close)
+if sellSignal and alertSellOn
+    alert(f_alertMsg("SELL", sellName), alert.freq_once_per_bar_close)
+// ======================= END OF SHARED SIGNAL ENGINE =======================

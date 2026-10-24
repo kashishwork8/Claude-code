@@ -1,0 +1,219 @@
+
+// =====================================================================================
+// STRATEGY-ONLY: inputs
+// =====================================================================================
+string DIR_BOTH   = "Long & short"
+string DIR_LONG   = "Long only"
+string DIR_SHORT  = "Short only"
+string SZ_PCT     = "Percent of equity"
+string SZ_FIXED   = "Fixed quantity"
+string SZ_RISK    = "Risk % of equity (uses stop distance)"
+string SL_PATTERN = "Beyond pattern extreme (+ ATR buffer)"
+string SL_ATR     = "ATR distance from signal close"
+string TP_RR      = "Risk/reward multiple"
+string TP_ATR     = "ATR multiple"
+string TP_NONE    = "None (stop only)"
+
+string G_ST = "10. Strategy - trades & sizing"
+string tradeDir   = input.string(DIR_BOTH, "Trade direction", options = [DIR_BOTH, DIR_LONG, DIR_SHORT], group = G_ST)
+bool   oneAtATime = input.bool(true, "One open position at a time (ignore signals while in a trade)", group = G_ST, tooltip = "If unticked, an opposite signal reverses the position, or only closes it when that direction is disabled.")
+string sizing     = input.string(SZ_PCT, "Position sizing", options = [SZ_PCT, SZ_FIXED, SZ_RISK], group = G_ST)
+float  pctEquity  = input.float(10.0, "Percent of equity (notional)", minval = 0.1, step = 1, group = G_ST)
+float  fixedQty   = input.float(10.0, "Fixed quantity (symbol units)", minval = 0, group = G_ST)
+float  riskPct    = input.float(1.0, "Risk % of equity per trade", minval = 0.01, step = 0.1, group = G_ST)
+float  qtyStep    = input.float(0.01, "Quantity rounding step", minval = 0.000001, group = G_ST)
+
+string G_RK = "11. Strategy - stop-loss & take-profit"
+string slMethod    = input.string(SL_PATTERN, "Stop-loss method", options = [SL_PATTERN, SL_ATR], group = G_RK)
+float  slAtrBuffer = input.float(0.1, "Pattern stop: ATR buffer (x ATR, 0 = exactly at the extreme)", minval = 0, step = 0.05, group = G_RK)
+float  slAtrMult   = input.float(1.5, "ATR stop: distance (x ATR)", minval = 0.1, step = 0.1, group = G_RK)
+string tpMethod    = input.string(TP_RR, "Take-profit method", options = [TP_RR, TP_ATR, TP_NONE], group = G_RK)
+float  rrRatio     = input.float(2.0, "Risk/reward ratio (target = R x risk)", minval = 0.1, step = 0.1, group = G_RK)
+float  tpAtrMult   = input.float(3.0, "ATR target: distance (x ATR)", minval = 0.1, step = 0.1, group = G_RK)
+bool   recalcFill  = input.bool(true, "Re-anchor the R:R target to the actual fill price", group = G_RK, tooltip = "The first exit order uses the signal close. From the next candle on, the target is recomputed from strategy.position_avg_price; the stop stays where it was set.")
+
+string G_DT = "12. Strategy - test window & reports"
+bool useDateRange = input.bool(false, "Restrict entries to a date window", group = G_DT, tooltip = "Use this for chronological in-sample / out-of-sample tests.")
+int  startDate    = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Window start", group = G_DT)
+int  endDate      = input.time(timestamp("31 Dec 2030 23:59 +0000"), "Window end", group = G_DT)
+bool showStats    = input.bool(true, "Show summary statistics table", group = G_DT)
+bool showPatStats = input.bool(true, "Show per-pattern statistics table", group = G_DT)
+
+// =====================================================================================
+// STRATEGY-ONLY: helpers
+// =====================================================================================
+f_qty(float entryPx, float stopPx) =>
+    float pv  = syminfo.pointvalue
+    float raw = sizing == SZ_FIXED ? fixedQty : sizing == SZ_PCT ? strategy.equity * pctEquity / 100.0 / (entryPx * pv) : strategy.equity * riskPct / 100.0 / (math.abs(entryPx - stopPx) * pv)
+    math.floor(raw / qtyStep) * qtyStep
+
+f_target(float basePx, float stopPx, bool isLong, float atrAtEntry) =>
+    float risk = isLong ? basePx - stopPx : stopPx - basePx
+    float tgt  = na
+    if risk > 0
+        if tpMethod == TP_RR
+            tgt := isLong ? basePx + rrRatio * risk : basePx - rrRatio * risk
+        else if tpMethod == TP_ATR
+            tgt := isLong ? basePx + tpAtrMult * atrAtEntry : basePx - tpAtrMult * atrAtEntry
+    tgt
+
+// =====================================================================================
+// STRATEGY-ONLY: order logic
+// =====================================================================================
+bool allowLong  = tradeDir != DIR_SHORT
+bool allowShort = tradeDir != DIR_LONG
+bool inWindow   = not useDateRange or (time >= startDate and time <= endDate)
+bool inLong     = strategy.position_size > 0
+bool inShort    = strategy.position_size < 0
+bool isFlat     = strategy.position_size == 0
+
+var float longStop  = na
+var float shortStop = na
+var float longAtr   = na
+var float shortAtr  = na
+
+// Keep the target anchored to the real fill once the position exists
+if recalcFill and inLong and not na(longStop)
+    strategy.exit("Long Exit", from_entry = "Long", stop = longStop, limit = f_target(strategy.position_avg_price, longStop, true, longAtr), comment_loss = "SL", comment_profit = "TP")
+if recalcFill and inShort and not na(shortStop)
+    strategy.exit("Short Exit", from_entry = "Short", stop = shortStop, limit = f_target(strategy.position_avg_price, shortStop, false, shortAtr), comment_loss = "SL", comment_profit = "TP")
+
+float longStopCalc  = slMethod == SL_PATTERN ? buyLo - slAtrBuffer * atr : close - slAtrMult * atr
+float shortStopCalc = slMethod == SL_PATTERN ? sellHi + slAtrBuffer * atr : close + slAtrMult * atr
+
+if buySignal and inWindow
+    bool canOpen = allowLong and (isFlat or (inShort and not oneAtATime))
+    if canOpen and close - longStopCalc > 0
+        float q = f_qty(close, longStopCalc)
+        if q > 0
+            longStop := longStopCalc
+            longAtr  := atr
+            strategy.entry("Long", strategy.long, qty = q, comment = buyName)
+            strategy.exit("Long Exit", from_entry = "Long", stop = longStop, limit = f_target(close, longStop, true, atr), comment_loss = "SL", comment_profit = "TP")
+    else if not allowLong and inShort and not oneAtATime
+        strategy.close("Short", comment = "Opposite signal")
+
+if sellSignal and inWindow
+    bool canOpen = allowShort and (isFlat or (inLong and not oneAtATime))
+    if canOpen and shortStopCalc - close > 0
+        float q = f_qty(close, shortStopCalc)
+        if q > 0
+            shortStop := shortStopCalc
+            shortAtr  := atr
+            strategy.entry("Short", strategy.short, qty = q, comment = sellName)
+            strategy.exit("Short Exit", from_entry = "Short", stop = shortStop, limit = f_target(close, shortStop, false, atr), comment_loss = "SL", comment_profit = "TP")
+    else if not allowShort and inLong and not oneAtATime
+        strategy.close("Long", comment = "Opposite signal")
+
+if useDateRange and time > endDate and strategy.position_size != 0
+    strategy.close_all(comment = "Test window ended")
+
+// =====================================================================================
+// STRATEGY-ONLY: extra statistics built from the closed-trade list
+// (net of the commission and slippage set in Properties)
+// =====================================================================================
+var map<string, int>   patTrades = map.new<string, int>()
+var map<string, int>   patWins   = map.new<string, int>()
+var map<string, float> patNet    = map.new<string, float>()
+var map<string, float> patGrossW = map.new<string, float>()
+var map<string, float> patGrossL = map.new<string, float>()
+var int   doneTrades = 0
+var int   longN      = 0
+var int   longW      = 0
+var float longNet    = 0.0
+var int   shortN     = 0
+var int   shortW     = 0
+var float shortNet   = 0.0
+var float sumRetPct  = 0.0
+
+while doneTrades < strategy.closedtrades
+    int    k        = doneTrades
+    string cmt      = strategy.closedtrades.entry_comment(k)
+    string key      = cmt == "" ? "(no comment)" : cmt
+    float  pnl      = strategy.closedtrades.profit(k)
+    float  sz       = strategy.closedtrades.size(k)
+    float  notional = math.abs(sz) * strategy.closedtrades.entry_price(k) * syminfo.pointvalue
+    sumRetPct += notional > 0 ? pnl / notional * 100.0 : 0.0
+    if sz > 0
+        longN   += 1
+        longW   += pnl > 0 ? 1 : 0
+        longNet += pnl
+    else
+        shortN   += 1
+        shortW   += pnl > 0 ? 1 : 0
+        shortNet += pnl
+    patTrades.put(key, nz(patTrades.get(key)) + 1)
+    patWins.put(key, nz(patWins.get(key)) + (pnl > 0 ? 1 : 0))
+    patNet.put(key, nz(patNet.get(key)) + pnl)
+    patGrossW.put(key, nz(patGrossW.get(key)) + math.max(pnl, 0.0))
+    patGrossL.put(key, nz(patGrossL.get(key)) + math.max(-pnl, 0.0))
+    doneTrades += 1
+
+f_cell(table t, int col, int row, string txt, color txtCol) =>
+    table.cell(t, col, row, txt, text_color = txtCol, text_size = size.small, text_halign = text.align_left)
+
+f_pct(float num, float den) =>
+    den > 0 ? str.tostring(num / den * 100.0, "#0.0") + "%" : "n/a"
+
+var table statsT = table.new(position.bottom_left, 2, 17, bgcolor = color.new(color.black, 15), border_color = color.gray, border_width = 1)
+if showStats and barstate.islast
+    int   n    = strategy.closedtrades
+    float gp   = strategy.grossprofit
+    float gl   = math.abs(strategy.grossloss)
+    float np   = strategy.netprofit
+    string cur = " " + syminfo.currency
+    f_cell(statsT, 0, 0, "Backtest (net of costs)", color.yellow)
+    f_cell(statsT, 1, 0, syminfo.tickerid + " " + timeframe.period, color.yellow)
+    f_cell(statsT, 0, 1, "Closed trades", color.white)
+    f_cell(statsT, 1, 1, str.tostring(n), color.white)
+    f_cell(statsT, 0, 2, "Win / loss / even", color.white)
+    f_cell(statsT, 1, 2, str.tostring(strategy.wintrades) + " / " + str.tostring(strategy.losstrades) + " / " + str.tostring(strategy.eventrades), color.white)
+    f_cell(statsT, 0, 3, "Win rate", color.white)
+    f_cell(statsT, 1, 3, f_pct(strategy.wintrades, n), color.white)
+    f_cell(statsT, 0, 4, "Net profit", color.white)
+    f_cell(statsT, 1, 4, str.tostring(np, "#,##0.00") + cur, np >= 0 ? color.lime : color.red)
+    f_cell(statsT, 0, 5, "Net profit % of initial capital", color.white)
+    f_cell(statsT, 1, 5, f_pct(np, strategy.initial_capital), np >= 0 ? color.lime : color.red)
+    f_cell(statsT, 0, 6, "Gross profit", color.white)
+    f_cell(statsT, 1, 6, str.tostring(gp, "#,##0.00") + cur, color.white)
+    f_cell(statsT, 0, 7, "Gross loss", color.white)
+    f_cell(statsT, 1, 7, str.tostring(gl, "#,##0.00") + cur, color.white)
+    f_cell(statsT, 0, 8, "Profit factor", color.white)
+    f_cell(statsT, 1, 8, gl > 0 ? str.tostring(gp / gl, "#0.00") : "n/a", color.white)
+    f_cell(statsT, 0, 9, "Max equity drawdown", color.white)
+    f_cell(statsT, 1, 9, str.tostring(strategy.max_drawdown, "#,##0.00") + cur, color.white)
+    f_cell(statsT, 0, 10, "Avg winning trade", color.white)
+    f_cell(statsT, 1, 10, strategy.wintrades > 0 ? str.tostring(gp / strategy.wintrades, "#,##0.00") + cur : "n/a", color.white)
+    f_cell(statsT, 0, 11, "Avg losing trade", color.white)
+    f_cell(statsT, 1, 11, strategy.losstrades > 0 ? str.tostring(-gl / strategy.losstrades, "#,##0.00") + cur : "n/a", color.white)
+    f_cell(statsT, 0, 12, "Avg trade", color.white)
+    f_cell(statsT, 1, 12, n > 0 ? str.tostring(np / n, "#,##0.00") + cur : "n/a", color.white)
+    f_cell(statsT, 0, 13, "Avg trade return (% of notional)", color.white)
+    f_cell(statsT, 1, 13, n > 0 ? str.tostring(sumRetPct / n, "#0.00") + "%" : "n/a", color.white)
+    f_cell(statsT, 0, 14, "Long: trades / win% / net", color.white)
+    f_cell(statsT, 1, 14, str.tostring(longN) + " / " + f_pct(longW, longN) + " / " + str.tostring(longNet, "#,##0.00"), color.white)
+    f_cell(statsT, 0, 15, "Short: trades / win% / net", color.white)
+    f_cell(statsT, 1, 15, str.tostring(shortN) + " / " + f_pct(shortW, shortN) + " / " + str.tostring(shortNet, "#,##0.00"), color.white)
+    f_cell(statsT, 0, 16, "Open P/L", color.white)
+    f_cell(statsT, 1, 16, str.tostring(strategy.openprofit, "#,##0.00") + cur, color.white)
+
+var table patT = table.new(position.bottom_right, 5, 32, bgcolor = color.new(color.black, 15), border_color = color.gray, border_width = 1)
+if showPatStats and barstate.islast
+    f_cell(patT, 0, 0, "Pattern (entry)", color.yellow)
+    f_cell(patT, 1, 0, "Trades", color.yellow)
+    f_cell(patT, 2, 0, "Win %", color.yellow)
+    f_cell(patT, 3, 0, "Net P/L", color.yellow)
+    f_cell(patT, 4, 0, "PF", color.yellow)
+    int row = 1
+    for key in patTrades.keys()
+        if row < 32
+            int   nT = nz(patTrades.get(key))
+            float gw = nz(patGrossW.get(key))
+            float gl = nz(patGrossL.get(key))
+            float nt = nz(patNet.get(key))
+            f_cell(patT, 0, row, key, color.white)
+            f_cell(patT, 1, row, str.tostring(nT), color.white)
+            f_cell(patT, 2, row, f_pct(nz(patWins.get(key)), nT), color.white)
+            f_cell(patT, 3, row, str.tostring(nt, "#,##0.00"), nt >= 0 ? color.lime : color.red)
+            f_cell(patT, 4, row, gl > 0 ? str.tostring(gw / gl, "#0.00") : "n/a", color.white)
+            row += 1

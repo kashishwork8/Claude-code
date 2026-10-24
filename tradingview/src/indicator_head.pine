@@ -1,0 +1,12 @@
+//@version=6
+// =====================================================================================
+// CFI WTI 1H · RSI(5) Candlestick Reversal Signals — INDICATOR
+// -------------------------------------------------------------------------------------
+// * Markers, labels, pattern boxes and alerts for RSI(5) + candlestick reversals.
+// * Uses only the chart's own OHLC data (intended for the CFI WTI spot/CFD 1-hour chart).
+// * Signals are evaluated on CLOSED candles only; no request.security, no lookahead.
+// * The "SHARED SIGNAL ENGINE" block below is identical in the companion strategy.
+// * Educational tool. Not financial advice. Past results do not predict future results.
+// =====================================================================================
+indicator("CFI WTI 1H RSI(5) Candlestick Reversal", shorttitle = "WTI RSI5 Reversal", overlay = true, max_labels_count = 500, max_boxes_count = 500)
+
