@@ -1,0 +1,52 @@
+//@version=6
+strategy("WTI RSI(5) Pullback + EMA50 Trend", overlay=true,
+     pyramiding=0,
+     default_qty_type=strategy.cash, default_qty_value=10000,
+     initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.0,
+     process_orders_on_close=false, calc_on_every_tick=false)
+
+// ── Inputs ──────────────────────────────────────────────
+emaLen   = input.int(50, "EMA length", minval=1)
+rsiLen   = input.int(5,  "RSI length", minval=1)
+rsiLow   = input.float(20, "RSI oversold level")
+rsiHigh  = input.float(80, "RSI overbought level")
+tpUsd    = input.float(2.0, "Take profit ($ price move)", step=0.1)
+slUsd    = input.float(2.0, "Stop loss ($ price move)",   step=0.1)
+useLongs  = input.bool(true, "Enable longs")
+useShorts = input.bool(true, "Enable shorts")
+
+// ── Indicators ──────────────────────────────────────────
+ema = ta.ema(close, emaLen)
+rsi = ta.rsi(close, rsiLen)
+
+emaRising  = ema > ema[1]
+emaFalling = ema < ema[1]
+
+// ── Signals (evaluated on completed bar; fill at next bar's open) ──
+// crossover = rsi > 20 now AND rsi <= 20 on the previous bar ("reaches or falls below 20")
+longSignal  = barstate.isconfirmed and close > ema and emaRising  and ta.crossover(rsi, rsiLow)
+shortSignal = barstate.isconfirmed and close < ema and emaFalling and ta.crossunder(rsi, rsiHigh)
+
+flat = strategy.position_size == 0
+
+if useLongs and longSignal and flat
+    strategy.entry("Long", strategy.long)
+
+if useShorts and shortSignal and flat
+    strategy.entry("Short", strategy.short)
+
+// ── Exits: fixed $ distance from actual average fill price ──
+if strategy.position_size > 0
+    strategy.exit("Long Exit", "Long",
+         limit = strategy.position_avg_price + tpUsd,
+         stop  = strategy.position_avg_price - slUsd)
+
+if strategy.position_size < 0
+    strategy.exit("Short Exit", "Short",
+         limit = strategy.position_avg_price - tpUsd,
+         stop  = strategy.position_avg_price + slUsd)
+
+// ── Plots ───────────────────────────────────────────────
+plot(ema, "EMA", color=emaRising ? color.green : color.red, linewidth=2)
+plotshape(longSignal  and flat and useLongs,  "Long",  shape.triangleup,   location.belowbar, color.green, size=size.tiny)
+plotshape(shortSignal and flat and useShorts, "Short", shape.triangledown, location.abovebar, color.red,   size=size.tiny)
